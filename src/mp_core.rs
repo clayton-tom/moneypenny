@@ -1,14 +1,29 @@
+pub struct Message {
+    pub body: String,
+    pub output_time: bool,
+    pub sender: String,
+}
+
 pub mod core_io {
         
-    pub fn output_message(message: &str) {
-        let msg_string = String::from(message);
-        println!("{}", msg_string);
+    pub fn output_message(message: super::Message) {
+        let msg_string: String = format_message_to_str(message);
+        print_to_output(msg_string)
     }
 
-    pub fn output_message_with_time(message: &str) {
-        let time_str = crate::mp_core::core_time::get_time_as_str();
-        let msg_string = format!("{}: {}", time_str, message);
-        output_message(&msg_string);
+    fn format_message_to_str(message: super::Message) -> String {
+        let msg_string: String;
+        if message.output_time {
+            let time_str = crate::mp_core::core_time::get_time_as_str();
+            msg_string = format!("[{}] {}: {}", message.sender, time_str, message.body);
+        } else {
+            msg_string = format!("[{}] {}", message.sender, message.body);
+        }
+        return msg_string;
+    }
+
+    fn print_to_output(message: String) {
+        println!("{}", message);
     }
 }
 
