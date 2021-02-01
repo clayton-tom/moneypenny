@@ -5,6 +5,7 @@ pub struct Message {
 }
 
 pub mod core_io {
+    use std::fs;
         
     pub fn output_message(message: super::Message) {
         let msg_string: String = format_message_to_str(message);
@@ -24,6 +25,21 @@ pub mod core_io {
 
     fn print_to_output(message: String) {
         println!("{}", message);
+
+    pub fn read_config_file_as_str(path: String) -> String {
+        let config_str = match fs::read_to_string(path) {
+            Ok(input) => input,
+            Err(e) => {
+                let err_msg = super::Message {
+                    body: String::from("Error reading the config file."),
+                    output_time: true,
+                    sender: String::from("Core"),
+                };
+                output_message(err_msg);
+                return e.to_string();
+            }
+        };
+        return config_str;
     }
 
     #[cfg(test)]
@@ -48,6 +64,13 @@ pub mod core_io {
             };
             let re = Regex::new(r#"\[Test module\] [A-Za-z]+ [0-9]+ [0-9]+:[0-9]+:[0-9]+: This is another test string."#).unwrap();
             assert!(re.is_match(&format_message_to_str(message_time)));
+        }
+
+        #[test]
+        fn test_read_config_file_as_str() {
+            let test_path = String::from("src/test/test.toml");
+            let expected: String = String::from("[Test]\ntest_key = \"Test string\"");
+            assert_eq!(expected, read_config_file_as_str(test_path));
         }
     }
 }
