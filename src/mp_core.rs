@@ -73,15 +73,15 @@ pub mod core_io {
                 output_time: true,
                 sender: String::from("Test module"),
             };
-            let re = Regex::new(r#"\[Test module\] [A-Za-z]+ [0-9]+ [0-9]+:[0-9]+:[0-9]+: This is another test string."#).unwrap();
+            let re = Regex::new(r#"\[Test module\] [A-Za-z]+ +[0-9]+ [0-9]+:[0-9]+:[0-9]+: This is another test string."#).unwrap();
             assert!(re.is_match(&format_message_to_str(message_time)));
         }
 
         #[test]
-        fn test_read_config_file_as_str() {
+        fn test_read_file_as_str() {
             let test_path = String::from("src/test/test.toml");
             let expected: String = String::from("[Test]\ntest_key = \"Test string\"");
-            assert_eq!(expected, read_config_file_as_str(test_path));
+            assert_eq!(expected, read_file_as_str(test_path));
         }
     }
 }
