@@ -1,4 +1,3 @@
-use ical;
 use std::str::FromStr;
 use chrono::prelude::*;
 use crate::mp_core;
@@ -43,9 +42,8 @@ fn output_mp_calendar_message(str_message: String) {
 
 pub mod cal_io {
     use ical::parser::ical::component::IcalCalendar;
-    use super::DateTime;
-    use super::Utc;
-    use super::{MpEvent, EventStatus, FromStr};
+    use super::{DateTime, Utc, TimeZone}; // Chrono imports
+    use super::{MpEvent, EventStatus, FromStr}; // MP imports
 
     pub fn parse_file_to_ical_calendar(path: String) -> Result<IcalCalendar, ical::parser::ParserError> {
         use std::io::BufReader;
@@ -108,6 +106,49 @@ pub mod cal_io {
     }
 
     fn convert_ical_time_to_utc(ical_time: Option<String>, ical_tz: Option<Vec<(String, Vec<String>)>>) -> Option<DateTime<Utc>> {
-        todo!();
+        // for now we're pretending all time is in UTC
+        match ical_tz {
+            Some(tz_vec) => {
+                // TODO
+                // do something with timezone offset
+            }
+            None => ()
+        }
+        match ical_time {
+            Some(ical_time) => {
+                let split_vec: Vec<&str> = ical_time.split("T").collect();
+                let date_str = split_vec[0]; // e.g. 20130802
+                let time_str = split_vec[1]; // e.g. 200000(Z)
+                let (year_str, month_str, day_str) = (&date_str[..4], &date_str[4..6], &date_str[6..8]);
+                let (hr_str, min_str, sec_str) = (&time_str[..2], &time_str[2..4], &time_str[4..6]);
+                let dt_str = format!("{} {} {} {} {} {}", year_str, month_str, day_str, hr_str, min_str, sec_str);
+                let format_str = String::from("%Y %m %d %H %M %S");
+                let time: Result<DateTime<Utc>, _> = Utc::datetime_from_str(&Utc, &dt_str, &format_str);
+                match time {
+                    Ok(time_utc) => return Some(time_utc),
+                    Err(e) => {
+                        super::output_mp_calendar_message(format!("Error converting Ical time to UTC: {}", e.to_string()));
+                        return None
+                    }
+                }
+            }
+            None => return None
+        }
     }
+
+    #[cfg(test)]
+    mod cal_io_tests {
+        use crate::mp_calendar::cal_io::*;
+
+        #[test]
+        fn test_convert_ical_time_to_utc_no_offset() {
+            let test_ical_time = Some(String::from("20130802T200000Z"));
+            let test_ical_tz_vec = None;
+            let test_time_utc = convert_ical_time_to_utc(test_ical_time, test_ical_tz_vec).unwrap();
+            let expected_time_fixedoff = DateTime::parse_from_rfc3339(&String::from("2013-08-02T20:00:00-00:00")).unwrap();
+            assert_eq!(expected_time_fixedoff, test_time_utc);
+            println!("{:?}", test_time_utc);
+        }
+    }
+
 }
