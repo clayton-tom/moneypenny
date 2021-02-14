@@ -1,8 +1,9 @@
 use std::str::FromStr;
+use std::cmp::Ordering;
 use chrono::prelude::*;
 use crate::mp_core;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum EventStatus {
     Tentative,
     Confirmed,
@@ -21,7 +22,7 @@ impl FromStr for EventStatus {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct MpEvent {
     name: Option<String>,
     start_time: Option<DateTime<Utc>>,
@@ -29,6 +30,86 @@ pub struct MpEvent {
     location: Option<String>,
     description: Option<String>,
     status: Option<EventStatus>
+}
+
+impl MpEvent {
+    fn cmp_start_time(&self, other: &MpEvent) -> Option<Ordering> {
+        let lhs_time = match self.start_time {
+            Some(time) => time,
+            None => return Some(Ordering::Greater)
+        };
+        let rhs_time = match other.start_time {
+            Some(time) => time,
+            None => return Some(Ordering::Less)
+        };
+        return lhs_time.partial_cmp(&rhs_time);
+    }
+
+    // Assumes lhs start time before rhs start time
+    fn ordered_has_overlap(&self, other: &MpEvent) -> bool {
+        let lhs_end_time = match self.end_time {
+            Some(time) => time,
+            None => return false
+        };
+        let rhs_start_time = match other.start_time {
+            Some(time) => time,
+            None => return false
+        };
+        return lhs_end_time.ge(&rhs_start_time);
+    }
+}
+
+#[cfg(test)]
+mod calendar_mpevent_tests {
+    use super::*;
+
+    fn make_event(start_secs: i64, end_secs: i64) -> MpEvent {
+        let dt1 = Utc.timestamp(start_secs, 0);
+        let dt2 = Utc.timestamp(end_secs, 0);
+        let this_event = MpEvent {
+            name: None,
+            start_time: Some(dt1),
+            end_time: Some(dt2),
+            location: None,
+            description: None,
+            status:None
+        };
+        return this_event;
+    }
+
+    #[test]
+    fn test_cmp_start_time() {
+        let event1 = make_event(100, 300);
+        let event2 = make_event(400, 500);
+        let event3 = make_event(100, 200);
+        let cmp_1_2 = event1.cmp_start_time(&event2);
+        assert_eq!(Ordering::Less, cmp_1_2.unwrap());
+        let cmp_2_1 = event2.cmp_start_time(&event1);
+        assert_eq!(Ordering::Greater, cmp_2_1.unwrap());
+        let cmp_1_3 = event1.cmp_start_time(&event3);
+        assert_eq!(Ordering::Equal, cmp_1_3.unwrap());
+    }
+
+    #[test]
+    fn test_ordered_has_overlap() {
+        let event1 = make_event(100, 300);
+        let event2 = make_event(200, 400);
+        let event3 = make_event(500, 600);
+        let event4 = make_event(600, 700);
+        let overlap_1_2 = event1.ordered_has_overlap(&event2);
+        assert_eq!(true, overlap_1_2);
+        let overlap_2_3 = event2.ordered_has_overlap(&event3);
+        assert_eq!(false, overlap_2_3);
+        let overlap_3_4 = event3.ordered_has_overlap(&event4);
+        assert_eq!(true, overlap_3_4);
+    }
+}
+
+impl PartialOrd for MpEvent {
+    // Use start time cmp function as default for ordering trait
+    fn partial_cmp(&self, other: &MpEvent) -> Option<Ordering> {
+        return MpEvent::cmp_start_time(self, other);
+    }
 }
 
 fn output_mp_calendar_message(str_message: String) {
