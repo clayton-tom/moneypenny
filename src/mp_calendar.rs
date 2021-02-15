@@ -163,6 +163,19 @@ mod calendar_mpevent_tests {
     }
 
     #[test]
+    fn test_cmp_end_time() {
+        let event1 = make_event(100, 300);
+        let event2 = make_event(100, 500);
+        let event3 = make_event(200, 300);
+        let cmp_1_2 = event1.cmp_end_time(&event2);
+        assert_eq!(Ordering::Less, cmp_1_2.unwrap());
+        let cmp_2_1 = event2.cmp_end_time(&event1);
+        assert_eq!(Ordering::Greater, cmp_2_1.unwrap());
+        let cmp_1_3 = event1.cmp_end_time(&event3);
+        assert_eq!(Ordering::Equal, cmp_1_3.unwrap());
+    }
+
+    #[test]
     fn test_ordered_has_overlap() {
         let event1 = make_event(100, 300);
         let event2 = make_event(200, 400);
