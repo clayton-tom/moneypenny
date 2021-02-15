@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 use chrono::prelude::*;
 use crate::mp_core;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 enum EventStatus {
     Tentative,
     Confirmed,
@@ -22,8 +22,9 @@ impl FromStr for EventStatus {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Eq)]
 pub struct MpEvent {
+    // TODO consider making name and start time non optional
     name: Option<String>,
     start_time: Option<DateTime<Utc>>,
     end_time: Option<DateTime<Utc>>,
@@ -45,6 +46,18 @@ impl MpEvent {
         return lhs_time.partial_cmp(&rhs_time);
     }
 
+    fn cmp_end_time(&self, other: &MpEvent) -> Option<Ordering> {
+        let lhs_time = match self.end_time {
+            Some(time) => time,
+            None => return Some(Ordering::Greater)
+        };
+        let rhs_time = match other.end_time {
+            Some(time) => time,
+            None => return Some(Ordering::Less)
+        };
+        return lhs_time.partial_cmp(&rhs_time);
+    }
+
     // Assumes lhs start time before rhs start time
     fn ordered_has_overlap(&self, other: &MpEvent) -> bool {
         let lhs_end_time = match self.end_time {
@@ -56,6 +69,65 @@ impl MpEvent {
             None => return false
         };
         return lhs_end_time.ge(&rhs_start_time);
+    }
+}
+
+impl PartialEq for MpEvent {
+    // name and start time the same
+    fn eq(&self, other: &MpEvent) -> bool {
+        let lhs_name = match &self.name {
+            Some(name) => name,
+            None => return false
+        };
+        let rhs_name = match &other.name {
+            Some(name) => name,
+            None => return false
+        };
+        let lhs_start = match self.start_time {
+            Some(time) => time,
+            None => return false
+        };
+        let rhs_start = match other.start_time {
+            Some(time) => time,
+            None => return false
+        };
+        return (lhs_name == rhs_name) && (lhs_start == rhs_start);
+    }
+}
+
+impl PartialOrd for MpEvent {
+    // Use start time cmp function as default for ordering trait
+    fn partial_cmp(&self, other: &MpEvent) -> Option<Ordering> {
+        return MpEvent::cmp_start_time(self, other);
+    }
+}
+
+impl Ord for MpEvent {
+    fn cmp(&self, other: &MpEvent) -> Ordering {
+        let ord_start = match MpEvent::cmp_start_time(self, other) {
+            Some(Ordering::Equal) => Ordering::Equal,
+            Some(Ordering::Greater) => return Ordering::Greater,
+            Some(Ordering::Less) => return Ordering::Less,
+            None => panic!()
+        };
+        // Assumes event with same start time but finishing later is chronologically 'before'
+        let ord_end = match MpEvent::cmp_end_time(self, other) {
+            Some(Ordering::Equal) => Ordering::Equal,
+            Some(Ordering::Greater) => return Ordering::Less,
+            Some(Ordering::Less) => return Ordering::Greater,
+            None => panic!()
+        };
+        let ord_name = match self.name.cmp(&other.name) {
+            Ordering::Equal => Ordering::Equal,
+            Ordering::Greater => return Ordering::Greater,
+            Ordering::Less => return Ordering::Less
+        };
+        if ord_start == Ordering::Equal && ord_end == Ordering::Equal && ord_name == Ordering::Equal {
+            return Ordering::Equal;
+        } else {
+            output_mp_calendar_message(String::from("MpEvent Ord is breaking it's contract"));
+            panic!();
+        }
     }
 }
 
@@ -105,12 +177,6 @@ mod calendar_mpevent_tests {
     }
 }
 
-impl PartialOrd for MpEvent {
-    // Use start time cmp function as default for ordering trait
-    fn partial_cmp(&self, other: &MpEvent) -> Option<Ordering> {
-        return MpEvent::cmp_start_time(self, other);
-    }
-}
 
 fn output_mp_calendar_message(str_message: String) {
     let message = mp_core::Message {
