@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 use chrono::prelude::*;
 use crate::mp_core;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 enum EventStatus {
     Tentative,
     Confirmed,
@@ -22,12 +22,12 @@ impl FromStr for EventStatus {
     }
 }
 
-#[derive(Debug, Eq)]
+#[derive(Debug, Eq, Clone)]
 pub struct MpEvent {
     // TODO consider making name and start time non optional
     name: Option<String>,
-    start_time: Option<DateTime<Utc>>,
-    end_time: Option<DateTime<Utc>>,
+    start_time: Option<DateTime<FixedOffset>>,
+    end_time: Option<DateTime<FixedOffset>>,
     location: Option<String>,
     description: Option<String>,
     status: Option<EventStatus>
@@ -58,7 +58,7 @@ impl MpEvent {
         return lhs_time.partial_cmp(&rhs_time);
     }
 
-    // Assumes lhs start time before rhs start time
+    /// Assumes lhs start time before rhs start time
     fn ordered_has_overlap(&self, other: &MpEvent) -> bool {
         let lhs_end_time = match self.end_time {
             Some(time) => time,
@@ -69,6 +69,54 @@ impl MpEvent {
             None => return false
         };
         return lhs_end_time.ge(&rhs_start_time);
+    }
+
+    /// Convert an MpEvent into a string for it's ICS notation
+    fn deserialise_to_ics_string(&self) -> String {
+        let mut ics_event = String::from("BEGIN:VEVENT\n");
+        let MpEvent {name, start_time, end_time, location, description, status} = self;
+        match name {
+            Some(name) => {
+                let strapp = &format!("SUMMARY:{}\n", name);
+                ics_event.push_str(&strapp)
+            },
+            None => {}
+        };
+        match start_time {
+            Some(time_utc) => {
+                let time = cal_io::convert_fixed_offset_to_ical_time(*time_utc);
+                ics_event.push_str(&format!("DTSTART:{}\n", time));
+            },
+            None => ()
+        };
+        match end_time {
+            Some(time_utc) => {
+                let time = cal_io::convert_fixed_offset_to_ical_time(*time_utc);
+                ics_event.push_str(&format!("DTEND:{}\n", time));
+            },
+            None => ()
+        };
+        match location {
+            Some(loc) => { ics_event.push_str(&format!("LOCATION:{}\n", loc)) },
+            None => ()
+        };
+        match description {
+            Some(desc) => { ics_event.push_str(&format!("DESCRIPTION:{}\n", desc)) },
+            None => ()
+        };
+        match status {
+            Some(enum_status) => {
+                let status;
+                match enum_status {
+                    EventStatus::Tentative => status = String::from("TENTATIVE"),
+                    EventStatus::Confirmed => status = String::from("CONFIRMED"),
+                    EventStatus::Cancelled => status = String::from("CANCELLED")
+                }
+                ics_event.push_str(&format!("STATUS:{}\n", status)) },
+            None => ()
+        };
+        ics_event.push_str(&String::from("END:VEVENT\n"));
+        return ics_event;
     }
 }
 
@@ -110,11 +158,11 @@ impl Ord for MpEvent {
             Some(Ordering::Less) => return Ordering::Less,
             None => panic!()
         };
-        // Assumes event with same start time but finishing later is chronologically 'before'
+        // Assumes event with same start time but later finish is chronologically 'later'
         let ord_end = match MpEvent::cmp_end_time(self, other) {
             Some(Ordering::Equal) => Ordering::Equal,
-            Some(Ordering::Greater) => return Ordering::Less,
-            Some(Ordering::Less) => return Ordering::Greater,
+            Some(Ordering::Greater) => return Ordering::Greater,
+            Some(Ordering::Less) => return Ordering::Less,
             None => panic!()
         };
         let ord_name = match self.name.cmp(&other.name) {
@@ -136,8 +184,8 @@ mod calendar_mpevent_tests {
     use super::*;
 
     fn make_event(start_secs: i64, end_secs: i64) -> MpEvent {
-        let dt1 = Utc.timestamp(start_secs, 0);
-        let dt2 = Utc.timestamp(end_secs, 0);
+        let dt1 = FixedOffset::west(0).timestamp(start_secs, 0);
+        let dt2 = FixedOffset::west(0).timestamp(end_secs, 0);
         let this_event = MpEvent {
             name: None,
             start_time: Some(dt1),
@@ -202,12 +250,15 @@ fn output_mp_calendar_message(str_message: String) {
 
 pub mod cal_io {
     use ical::parser::ical::component::IcalCalendar;
-    use super::{DateTime, Utc, TimeZone}; // Chrono imports
+    use std::io::prelude::*;
+    use std::io::Error;
+    use std::fs::File;
+    use super::{DateTime, Utc, FixedOffset, TimeZone}; // Chrono imports
     use super::{MpEvent, EventStatus, FromStr}; // MP imports
 
     pub fn parse_file_to_ical_calendar(path: String) -> Result<IcalCalendar, ical::parser::ParserError> {
         use std::io::BufReader;
-        use std::fs::File;
+        //use std::fs::File;
 
         let buf = BufReader::new(File::open(path).unwrap());
         let mut reader = ical::IcalParser::new(buf);
@@ -223,6 +274,34 @@ pub mod cal_io {
                 return Err(ical::parser::ParserError::NotComplete);
             }
         }
+    }
+
+    /// This will create a new file to write to, or COMPLETELY OVERWRITE an existing one. Refactor for poss append?
+    pub fn deserialise_mpevents_to_ics_file(write_path: String, events: Vec<MpEvent>) { // todo return
+        use std::path::Path;
+
+        let path = Path::new(&write_path);
+        let display = path.display(); // gives string of filename
+
+        // Open a file in write-only mode, returns `io::Result<File>`
+        let mut file = match File::create(&path) {
+            Err(why) => {
+                super::output_mp_calendar_message(format!("Couldn't create {}: {}", display, why));
+            },
+            Ok(mut open_file) => {
+                let cal_start = "BEGIN:VCALENDAR\nVERSION:2.0\nCALSCALE:GREGORIAN\n"; // TODO take these elsewhere
+                let cal_end = "END:VCALENDAR";
+                open_file.write(cal_start.as_bytes()).unwrap();
+                for event in events{
+                    let event_string = event.deserialise_to_ics_string();
+                    match open_file.write_all(event_string.as_bytes()) {
+                        Ok(_) => {}, // continue
+                        Err(e) => super::output_mp_calendar_message(format!("Failed to deserialise MPEvents to ICS file {}: {}", display, e))
+                    }
+                }
+                open_file.write(cal_end.as_bytes()).unwrap();
+            }
+        };
     }
 
     pub fn extract_events_from_ical(cal: IcalCalendar) -> Vec<MpEvent> {
@@ -243,9 +322,9 @@ pub mod cal_io {
                 if name == "SUMMARY" {
                     mp_event.name = prop.value;
                 } else if name == "DTSTART" {
-                    mp_event.start_time = convert_ical_time_to_utc(prop.value, prop.params);
+                    mp_event.start_time = convert_ical_time_to_fixed_offset(prop.value, prop.params);
                 } else if name == "DTEND" {
-                    mp_event.end_time = convert_ical_time_to_utc(prop.value, prop.params);
+                    mp_event.end_time = convert_ical_time_to_fixed_offset(prop.value, prop.params);
                 } else if name == "LOCATION" {
                     mp_event.location = prop.value;
                 } else if name == "DESCRIPTION" {
@@ -265,8 +344,7 @@ pub mod cal_io {
         return mp_events;
     }
 
-    fn convert_ical_time_to_utc(ical_time: Option<String>, ical_tz: Option<Vec<(String, Vec<String>)>>) -> Option<DateTime<Utc>> {
-        // for now we're pretending all time is in UTC
+    fn convert_ical_time_to_fixed_offset(ical_time: Option<String>, ical_tz: Option<Vec<(String, Vec<String>)>>) -> Option<DateTime<FixedOffset>> {
         match ical_tz {
             Some(tz_vec) => {
                 // TODO
@@ -276,6 +354,7 @@ pub mod cal_io {
         }
         match ical_time {
             Some(ical_time) => {
+                let offset = 0; // todo
                 let split_vec: Vec<&str> = ical_time.split("T").collect();
                 let date_str = split_vec[0]; // e.g. 20130802
                 let time_str = split_vec[1]; // e.g. 200000(Z)
@@ -283,11 +362,11 @@ pub mod cal_io {
                 let (hr_str, min_str, sec_str) = (&time_str[..2], &time_str[2..4], &time_str[4..6]);
                 let dt_str = format!("{} {} {} {} {} {}", year_str, month_str, day_str, hr_str, min_str, sec_str);
                 let format_str = String::from("%Y %m %d %H %M %S");
-                let time: Result<DateTime<Utc>, _> = Utc::datetime_from_str(&Utc, &dt_str, &format_str);
+                let time: Result<DateTime<FixedOffset>, _> = FixedOffset::west(offset).datetime_from_str(&dt_str, &format_str);
                 match time {
-                    Ok(time_utc) => return Some(time_utc),
+                    Ok(time_fo) => return Some(time_fo),
                     Err(e) => {
-                        super::output_mp_calendar_message(format!("Error converting Ical time to UTC: {}", e.to_string()));
+                        super::output_mp_calendar_message(format!("Error converting Ical time to FixedOffset: {}", e.to_string()));
                         return None
                     }
                 }
@@ -296,19 +375,72 @@ pub mod cal_io {
         }
     }
 
+    /// Converts fixed offset time to string ical format YYYYMMDD'T'HHMMSS
+    pub fn convert_fixed_offset_to_ical_time(fo_time: DateTime<FixedOffset>) -> String {
+        let format = String::from("%Y%m%dT%H%M%S");
+        let ical_str = format!("{}", fo_time.format(&format));
+        return ical_str;
+    }
+
     #[cfg(test)]
     mod cal_io_tests {
         use crate::mp_calendar::cal_io::*;
 
         #[test]
-        fn test_convert_ical_time_to_utc_no_offset() {
+        fn test_convert_ical_time_to_fixed_offset() {
             let test_ical_time = Some(String::from("20130802T200000Z"));
             let test_ical_tz_vec = None;
-            let test_time_utc = convert_ical_time_to_utc(test_ical_time, test_ical_tz_vec).unwrap();
-            let expected_time_fixedoff = DateTime::parse_from_rfc3339(&String::from("2013-08-02T20:00:00-00:00")).unwrap();
-            assert_eq!(expected_time_fixedoff, test_time_utc);
-            println!("{:?}", test_time_utc);
+            let test_time_fixed_offset = convert_ical_time_to_fixed_offset(test_ical_time, test_ical_tz_vec).unwrap();
+            let expected_time_fixed_offset = DateTime::parse_from_rfc3339(&String::from("2013-08-02T20:00:00-00:00")).unwrap();
+            assert_eq!(expected_time_fixed_offset, test_time_fixed_offset);
+        }
+
+        #[test]
+        fn test_convert_fixed_offset_to_ical_time() {
+            let time_fixedoff = DateTime::parse_from_rfc3339(&String::from("2013-08-02T20:00:00-00:00")).unwrap();
+            let expected_ical_time = String::from("20130802T200000");
+            let test_ical_time = convert_fixed_offset_to_ical_time(time_fixedoff);
+            assert_eq!(expected_ical_time, test_ical_time);
         }
     }
+}
 
+pub mod cal_ops {
+    use super::{MpEvent, DateTime, FixedOffset, EventStatus};
+
+    /// By default .sort() uses partial_cmp, this uses cmp for comparison by total ordering (Ord not PartialOrd)
+    pub fn sort_mpevents_chronologically_by_start(mut events: Vec<MpEvent>) -> Vec<MpEvent> {
+        events.sort_by(|a, b| a.cmp(b));
+        return events;
+    }
+
+    /// Creates a new MPEvent from a series of inputs
+    fn create_new_MPEvent(name: Option<String>,
+                        start_time: Option<DateTime<FixedOffset>>,
+                        end_time: Option<DateTime<FixedOffset>>,
+                        location: Option<String>,
+                        description: Option<String>,
+                        status: Option<EventStatus>) -> MpEvent {
+        return MpEvent{ name, start_time, end_time, location, description, status };
+    }
+
+    pub mod cal_ops_tests {
+        use crate::mp_calendar::cal_ops::*;
+
+        #[test]
+        pub fn test_sort_mpevents_chronologically_by_start() {
+            let time_1 = DateTime::parse_from_rfc3339(&String::from("2013-08-02T20:00:00-00:00")).unwrap();
+            let time_2 = DateTime::parse_from_rfc3339(&String::from("2013-08-03T20:00:00-00:00")).unwrap();
+            let time_3 = DateTime::parse_from_rfc3339(&String::from("2013-08-03T22:00:00-00:00")).unwrap();
+            let time_4 = DateTime::parse_from_rfc3339(&String::from("2013-08-04T22:00:00-00:00")).unwrap();
+            let event_1 = MpEvent {name: Some(String::from("Event1")),  start_time: Some(time_1), end_time: None, description: None, location: None, status: None };
+            let event_2 = MpEvent {name: Some(String::from("Event2")),  start_time: Some(time_2), end_time: Some(time_3), description: None, location: None, status: None };
+            let event_3 = MpEvent {name: Some(String::from("Event3")),  start_time: Some(time_2), end_time: Some(time_4), description: None, location: None, status: None };
+            let event_4 = MpEvent {name: Some(String::from("Event4")),  start_time: Some(time_3), end_time: None, description: None, location: None, status: None };
+            let mut unsorted_events: Vec<MpEvent> = vec!(event_3.clone(), event_2.clone(), event_4.clone(), event_1.clone());
+            let exp_sorted_events: Vec<MpEvent> = vec!(event_1, event_2, event_3, event_4);
+            let sorted_events = sort_mpevents_chronologically_by_start(unsorted_events);
+            assert_eq!(exp_sorted_events, sorted_events);
+        }
+    }
 }
